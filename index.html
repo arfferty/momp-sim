@@ -132,9 +132,10 @@ canvas{display:block}
 <button class="btn secondary" id="btnRecord">⏺ 录制</button>
 </div>
 <button class="btn" id="btnTour" style="width:100%;margin-top:8px;background:#e67e22;color:white;border:none">🎞 一键演示（自动导览）</button>
+<button class="btn" id="btnSlowMo" style="width:100%;margin-top:8px;background:#138d75;color:white;border:none">🔬 穿膜慢放特写</button>
 <div class="slider-row">
 <label>播放速度</label>
-<input type="range" id="speedSlider" min="0.2" max="3" step="0.1" value="0.5">
+<input type="range" id="speedSlider" min="0.1" max="3" step="0.1" value="0.5">
 <span class="val" id="speedVal">0.5x</span>
 </div>
 <div class="toggle-row">
@@ -28495,12 +28496,8 @@ var _mgT = (function() {
   return mg;
 })();
 function transitP(t3) {
-  for (let k = 0; k < _tkT.length - 1; k++) if (t3 <= _tkT[k + 1]) {
-    const h = _tkT[k + 1] - _tkT[k], u2 = (t3 - _tkT[k]) / h;
-    const h00 = 2 * u2 * u2 * u2 - 3 * u2 * u2 + 1, h10 = u2 * u2 * u2 - 2 * u2 * u2 + u2, h01 = -2 * u2 * u2 * u2 + 3 * u2 * u2, h11 = u2 * u2 * u2 - u2 * u2;
-    return h00 * _pkT[k] + h10 * h * _mgT[k] + h01 * _pkT[k + 1] + h11 * h * _mgT[k + 1];
-  }
-  return _pkT[_pkT.length - 1];
+  // 真实节奏：穿膜过程均匀推进、不刻意放慢；细节请用“穿膜慢放特写”单独查看
+  return t3;
 }
 var _wpP = [0, 0.39, 0.95, 1];
 var _wpT = [0, 0.62, 0.92, 1];
@@ -28527,12 +28524,8 @@ var _wpMg = (function() {
   return mg;
 })();
 function warpTime(p) {
-  for (let k = 0; k < _wpP.length - 1; k++) if (p <= _wpP[k + 1]) {
-    const h = _wpP[k + 1] - _wpP[k], u2 = (p - _wpP[k]) / h;
-    const h00 = 2 * u2 * u2 * u2 - 3 * u2 * u2 + 1, h10 = u2 * u2 * u2 - 2 * u2 * u2 + u2, h01 = -2 * u2 * u2 * u2 + 3 * u2 * u2, h11 = u2 * u2 * u2 - u2 * u2;
-    return h00 * _wpT[k] + h10 * h * _wpMg[k] + h01 * _wpT[k + 1] + h11 * h * _wpMg[k + 1];
-  }
-  return _wpT[_wpT.length - 1];
+  // 真实节奏：动画时间线性均匀推进，穿膜段不刻意放慢；要看细节请点“穿膜慢放特写”
+  return p;
 }
 function _therm(t, f1, f2, ph, amp) {
   return amp * (0.62 * Math.sin(t * f1 + ph) + 0.45 * Math.sin(t * f2 + ph * 1.7 + 1.3));
@@ -30039,6 +30032,54 @@ document.getElementById("btnTour").addEventListener("click", function () {
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && _tour.active) stopTour();
 });
+/* ===== 穿膜慢放特写：主动画按真实节奏，穿膜细节单独慢放 ===== */
+var _slowmo = { active: false, startFrame: 50, endFrame: 89, prevLoop: true, prevSpeed: 0.5, prevCam: new Vector3(), prevTg: new Vector3() };
+function playSlowMo() {
+  if (_tour.active) stopTour();
+  _slowmo.active = true;
+  _slowmo.prevLoop = state.loop; _slowmo.prevSpeed = state.speed;
+  _slowmo.prevCam.copy(camera.position); _slowmo.prevTg.copy(controls.target);
+  state.loop = false; state.speed = 0.1;
+  var _sl = document.getElementById("speedSlider"); _sl.value = 0.1;
+  document.getElementById("speedVal").textContent = "0.1x";
+  state.currentFrame = _slowmo.startFrame;
+  updateAnimation(_slowmo.startFrame);
+  flyTo(_tmpV.copy(poreCenter).addScaledVector(normal, 168).addScaledVector(u, 78), poreCenter);
+  state.playing = true;
+  document.getElementById("playBtn").textContent = "⏸";
+  document.getElementById("btnPlay").textContent = "⏸ 暂停";
+  document.getElementById("leftPanel").classList.add("collapsed");
+  document.getElementById("legend").style.display = "none";
+  _showSlowMoBar();
+}
+function stopSlowMo() {
+  if (!_slowmo.active) return;
+  _slowmo.active = false;
+  state.playing = false;
+  state.loop = _slowmo.prevLoop; state.speed = _slowmo.prevSpeed;
+  var _sl = document.getElementById("speedSlider"); _sl.value = state.speed;
+  document.getElementById("speedVal").textContent = state.speed + "x";
+  flyTo(_slowmo.prevCam, _slowmo.prevTg);
+  document.getElementById("leftPanel").classList.remove("collapsed");
+  document.getElementById("legend").style.display = "";
+  document.getElementById("playBtn").textContent = "▶";
+  document.getElementById("btnPlay").textContent = "▶ 播放";
+  _hideSlowMoBar();
+}
+function _showSlowMoBar() {
+  var b = document.createElement("div"); b.id = "slowmoBar";
+  b.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(19,115,100,0.9);color:#fff;padding:6px 16px;border-radius:20px;font:13px/1.4 'Microsoft YaHei',sans-serif;z-index:200;cursor:pointer;white-space:nowrap";
+  b.textContent = "🔬 穿膜慢放特写中 · 点击或按 Esc 退出";
+  b.addEventListener("click", stopSlowMo);
+  document.body.appendChild(b);
+}
+function _hideSlowMoBar() { var b = document.getElementById("slowmoBar"); if (b) b.remove(); }
+document.getElementById("btnSlowMo").addEventListener("click", function () {
+  if (_slowmo.active) stopSlowMo(); else playSlowMo();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && _slowmo.active) stopSlowMo();
+});
 function togglePlay() {
   state.playing = !state.playing;
   document.getElementById("playBtn").textContent = state.playing ? "\u23F8" : "\u25B6";
@@ -30696,6 +30737,9 @@ function animate(time) {
       else if (_st === 3) views.wide();
     }
     if (!state.playing) stopTour();
+  }
+  if (_slowmo.active) {
+    if (!state.playing || state.currentFrame >= _slowmo.endFrame) stopSlowMo();
   }
   if (_camTween.active) {
     _camTween.t += delta / _camTween.dur;
