@@ -184,8 +184,8 @@ canvas{display:block}
 <h3>🎨 渲染设置</h3>
 <div class="slider-row">
 <label>卡通细节</label>
-<input type="range" id="qualitySlider" min="4" max="16" step="2" value="8">
-<span class="val" id="qualityVal">中</span>
+<input type="range" id="qualitySlider" min="4" max="16" step="2" value="12">
+<span class="val" id="qualityVal">高</span>
 </div>
 <div class="toggle-row">
 <label>轮廓描边</label>
@@ -27758,7 +27758,7 @@ var state = {
   speed: 0.5,
   loop: true,
   autoRotate: false,
-  quality: 4,
+  quality: 12,
   outline: false,
   transparent: true,
   showLabels: true,
@@ -28646,23 +28646,92 @@ function createDynamicSpheres() {
 }
 function createProteinOutlineGeometry(atoms, targetRadius) {
   const points = [];
-  for (const atom of atoms) {
-    if (atom.atom === "CA" || atom.atom === "C" || atom.atom === "N" || atom.atom === "O") {
-      points.push(new Vector3(atom.x, atom.y, atom.z));
+  for (const atom of atoms) points.push(new Vector3(atom.x, atom.y, atom.z));
+  if (points.length < 4) return null;
+  // 1) 真实原子点凸包
+  let geo = new ConvexGeometry(points);
+  // 2) 焊接凸包重复顶点，得到索引化网格
+  const _p0 = geo.attributes.position;
+  const _wmap = new Map();
+  const _wpos = [];
+  const _widx = [];
+  for (let i = 0; i < _p0.count; i++) {
+    const x = _p0.getX(i), y = _p0.getY(i), z = _p0.getZ(i);
+    const k = Math.round(x * 1e4) + "_" + Math.round(y * 1e4) + "_" + Math.round(z * 1e4);
+    if (_wmap.has(k)) {
+      _widx.push(_wmap.get(k));
+    } else {
+      const id = _wpos.length / 3;
+      _wmap.set(k, id);
+      _wpos.push(x, y, z);
+      _widx.push(id);
     }
   }
-  if (points.length < 4) return null;
-  const convexGeo = new ConvexGeometry(points);
-  convexGeo.computeBoundingBox();
+  let ng = new BufferGeometry();
+  ng.setAttribute("position", new Float32BufferAttribute(_wpos, 3));
+  ng.setIndex(_widx);
+  // 3) 包围中心 + 膨胀椭球半轴（放大到刚好包住所有顶点，作为光滑目标曲面）
+  ng.computeBoundingBox();
+  const _C = new Vector3();
+  ng.boundingBox.getCenter(_C);
+  let _hx = (ng.boundingBox.max.x - ng.boundingBox.min.x) / 2;
+  let _hy = (ng.boundingBox.max.y - ng.boundingBox.min.y) / 2;
+  let _hz = (ng.boundingBox.max.z - ng.boundingBox.min.z) / 2;
+  let _swell = 1e-6;
+  const _ap0 = ng.attributes.position;
+  for (let i = 0; i < _ap0.count; i++) {
+    const ex = (_ap0.getX(i) - _C.x) / _hx;
+    const ey = (_ap0.getY(i) - _C.y) / _hy;
+    const ez = (_ap0.getZ(i) - _C.z) / _hz;
+    const ev = Math.sqrt(ex * ex + ey * ey + ez * ez);
+    if (ev > _swell) _swell = ev;
+  }
+  _hx *= _swell; _hy *= _swell; _hz *= _swell;
+  // 4) 两次中点细分，新顶点向膨胀椭球吸附，使凸包大面拱起圆化（原顶点保留）
+  for (let it = 0; it < 2; it++) {
+    const ap = ng.attributes.position;
+    const ai = ng.index.array;
+    const np = [];
+    for (let i = 0; i < ap.count; i++) np.push(ap.getX(i), ap.getY(i), ap.getZ(i));
+    const em = new Map();
+    const mid = (a, b) => {
+      const k = a < b ? a + "_" + b : b + "_" + a;
+      if (em.has(k)) return em.get(k);
+      const id = np.length / 3;
+      const mx = (np[a * 3] + np[b * 3]) / 2;
+      const my = (np[a * 3 + 1] + np[b * 3 + 1]) / 2;
+      const mz = (np[a * 3 + 2] + np[b * 3 + 2]) / 2;
+      const qx = mx - _C.x, qy = my - _C.y, qz = mz - _C.z;
+      const ql = Math.sqrt(qx * qx + qy * qy + qz * qz) || 1;
+      const ux = qx / ql, uy = qy / ql, uz = qz / ql;
+      const R = 1 / Math.sqrt((ux / _hx) * (ux / _hx) + (uy / _hy) * (uy / _hy) + (uz / _hz) * (uz / _hz));
+      const Px = _C.x + ux * R, Py = _C.y + uy * R, Pz = _C.z + uz * R;
+      const t = 0.55;
+      np.push(mx + (Px - mx) * t, my + (Py - my) * t, mz + (Pz - mz) * t);
+      em.set(k, id);
+      return id;
+    };
+    const ni = [];
+    for (let t = 0; t < ai.length; t += 3) {
+      const a = ai[t], b = ai[t + 1], c = ai[t + 2];
+      const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
+      ni.push(a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca);
+    }
+    const ng2 = new BufferGeometry();
+    ng2.setAttribute("position", new Float32BufferAttribute(np, 3));
+    ng2.setIndex(ni);
+    ng = ng2;
+  }
+  // 5) 平滑法线（消除硬棱）
+  ng.computeVertexNormals();
+  ng.computeBoundingBox();
   const center = new Vector3();
-  convexGeo.boundingBox.getCenter(center);
-  convexGeo.translate(-center.x, -center.y, -center.z);
-  convexGeo.computeBoundingSphere();
-  const radius = convexGeo.boundingSphere.radius;
-  const scale = targetRadius / radius;
-  convexGeo.scale(scale, scale, scale);
-  convexGeo.computeVertexNormals();
-  return convexGeo;
+  ng.boundingBox.getCenter(center);
+  ng.translate(-center.x, -center.y, -center.z);
+  ng.computeBoundingSphere();
+  const scale = targetRadius / ng.boundingSphere.radius;
+  ng.scale(scale, scale, scale);
+  return ng;
 }
 async function replaceCytcSphereWithOutline() {
   try {
